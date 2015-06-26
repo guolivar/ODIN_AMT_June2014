@@ -75,13 +75,15 @@ dust_data_temperature<-timeAverage(mydata = raw_dust_data_temperature,avg.time =
 long_scatter_temperature=reshape(dust_data_temperature[,c(2,3,4,5,6,7,8,9,10,11)],direction = 'long',varying = names(dust_data_temperature[2:9]),v.name='Dust',timevar = 'Sensor')
 long_scatter_temperature$Sensor=as.character(long_scatter_temperature$Sensor)
 png("./sensor_temperature_scatter.png",height = 620,width = 1280)
-ggplot(long_scatter_temperature, aes(x=Temperature, y=Dust, color=Sensor)) +
-  geom_point(shape=19,alpha=1/4)+
+long_scatter_temperature_plot<-ggplot(long_scatter_temperature, aes(x=Temperature, y=Dust, color=Sensor)) +
+  geom_point(shape=19,alpha=1/3,size = 10)+
+  theme_bw()+
   theme(text = element_text(size = 30))+
   xlab('Temperature (C)')+
   ylab('Sensor response (mV)')
+long_scatter_temperature_plot
 dev.off()
-
+long_scatter_temperature_plot
 summary(Temp.lm<-lm(data=long_scatter_temperature,Dust~Temperature))
 ###############################################################################
 
@@ -117,139 +119,140 @@ odin_01$ODIN = odin_01$Dust
 odin_01$Dust<-NULL
 all_merged_FULL<-merge(odin_01,ecan_data,by = 'date',all = TRUE)
 all_merged.10min<-timeAverage(all_merged_FULL,avg.time = '10 min')
-
-# Dust performance using ECan data for calibration
-# Calibration expression:
-#  $ODIN_{calibrated}=A*ODIN_{raw}+B*Temperature_{ODIN}+C*RH_{ODIN}+D$
-
 # Full dataset 1 hour  
 all_merged.1hr<-timeAverage(all_merged.10min,avg.time='1 hour')
 all_merged.1hr$PMcoarse<-all_merged.1hr$PM10.FDMS - all_merged.1hr$PM2.5.FDMS
+
+# Remove drift from ODIN raw data
+# Estimate the baseline from a simple linear regression
+all_merged.1hr$ODIN_drift<-predict(lm(all_merged.1hr$ODIN~seq(all_merged.1hr$ODIN)),newdata = all_merged.1hr)
+
+all_merged.1hr$ODIN_drift[1] # Baseline at the beginning
+all_merged.1hr$ODIN_drift[length(all_merged.1hr$ODIN_drift)] # Baseline at the end 
+
+# Remove the baseline drift from the raw ODIN data
+all_merged.1hr$ODIN_raw <- all_merged.1hr$ODIN
+all_merged.1hr$ODIN_detrend<-all_merged.1hr$ODIN_raw - all_merged.1hr$ODIN_drift
+# Temperature correction
+summary(odin_T<-lm(data=all_merged.1hr,ODIN_detrend~Temperature,subset = Temperature>10))
+
+format(coef(odin_T),digits = 2)
+format((confint(odin_T)[,2]-confint(odin_T)[,1])/2,digits = 1)
+
+png('./odin_T_scatter.png',width = 750,height = 750)
+odin_T_scatter<-qplot(Temperature, ODIN_detrend,data = all_merged.1hr)+
+  #geom_point(colour = 'blue')
+  geom_abline(intercept = coef(odin_T)[1],slope = coef(odin_T)[2])+
+  ylab(bquote(ODIN[detrended]~'(mV)'))+
+  xlab('Temperature (C)')+
+  theme_bw()+
+  theme(text=element_text(size=30))
+odin_T_scatter
+dev.off()
+odin_T_scatter
+all_merged.1hr$ODIN <- all_merged.1hr$ODIN_detrend - predict(odin_T,newdata = all_merged.1hr)
+
+# Dust performance using ECan data for calibration
+# Calibration expression:
+#  $ODIN_{calibrated}=A*ODIN_{raw}+B$
+
+# Using only the first 30% of the data to fit the models
+data_selection.1hr <- rbinom(length(all_merged.1hr$date),1,0.3)
+data_selection.1hr <- (seq(length(all_merged.1hr$date))<(length(all_merged.1hr$date)/3))
 # PM$_{2.5}$ fdms
 summary(odin1.lm.1hr.pm2.5.fdms<-
-          lm(data=all_merged.1hr,PM2.5.FDMS~
-               ODIN+Temperature+Humidity))
+          lm(data=all_merged.1hr,PM2.5.FDMS~ODIN,
+             subset = data_selection.1hr == 1))
 format(coef(odin1.lm.1hr.pm2.5.fdms),digits = 1)
 format((confint(odin1.lm.1hr.pm2.5.fdms)[,2]-confint(odin1.lm.1hr.pm2.5.fdms)[,1])/2,digits = 1)
-
-# PM$_{10}$ fdms
-summary(odin1.lm.1hr.pm10.fdms<-
-          lm(data=all_merged.1hr,PM10.FDMS~
-               ODIN+Temperature+Humidity))
-format(coef(odin1.lm.1hr.pm10.fdms),digits = 1)
-format((confint(odin1.lm.1hr.pm10.fdms)[,2]-confint(odin1.lm.1hr.pm10.fdms)[,1])/2,digits = 1)
-
-# PM$_{coarse}$ fdms
-summary(odin1.lm.1hr.pmcoarse.fdms<-
-          lm(data=all_merged.1hr,PMcoarse~
-               ODIN+Temperature+Humidity))
-format(coef(odin1.lm.1hr.pmcoarse.fdms),digits = 1)
-format((confint(odin1.lm.1hr.pmcoarse.fdms)[,2]-confint(odin1.lm.1hr.pmcoarse.fdms)[,1])/2,digits = 1)
-
-# 24 hour dataset
-merged.24hr <- timeAverage(all_merged.1hr,avg.time = '24 hour',statistic = 'mean')
-
-# PM$_{2.5}$ fdms
-summary(odin1.lm.1dy.pm2.5.fdms<-
-          lm(data=merged.24hr,PM2.5.FDMS~
-               ODIN+Temperature+Humidity))
-format(coef(odin1.lm.1dy.pm2.5.fdms),digits = 1)
-format((confint(odin1.lm.1dy.pm2.5.fdms)[,2]-confint(odin1.lm.1dy.pm2.5.fdms)[,1])/2,digits = 1)
-
-# PM$_{10}$ fdms
-summary(odin1.lm.1dy.pm10.fdms<-
-          lm(data=merged.24hr,PM10.FDMS~
-               ODIN+Temperature+Humidity))
-format(coef(odin1.lm.1dy.pm10.fdms),digits = 1)
-format((confint(odin1.lm.1dy.pm10.fdms)[,2]-confint(odin1.lm.1dy.pm10.fdms)[,1])/2,digits = 1)
-
-# PM$_{coarse}$ fdms
-summary(odin1.lm.1dy.pmcoarse.fdms<-
-          lm(data=merged.24hr,PMcoarse~
-               ODIN+Temperature+Humidity))
-format(coef(odin1.lm.1dy.pmcoarse.fdms),digits = 1)
-format((confint(odin1.lm.1dy.pmcoarse.fdms)[,2]-confint(odin1.lm.1dy.pmcoarse.fdms)[,1])/2,digits = 1)
-
 ### Calculate the corrected data
 all_merged.1hr$ODIN.2.5f<-predict(odin1.lm.1hr.pm2.5.fdms,
                                   newdata = all_merged.1hr)
-all_merged.1hr$ODIN.10f<-predict(odin1.lm.1hr.pm10.fdms,
-                                 newdata = all_merged.1hr)
-all_merged.1hr$ODIN.coarse<-predict(odin1.lm.1hr.pmcoarse.fdms,
-                                    newdata = all_merged.1hr)
+sqrt( mean( (all_merged.1hr$ODIN.2.5f-all_merged.1hr$PM2.5.FDMS)^2 , na.rm = TRUE ) ) #RMSE for the whole dataset
+cor(all_merged.1hr$ODIN.2.5f,all_merged.1hr$PM2.5.FDMS,use = "pairwise")^2 # R^2 for the whole dataset
+# 24 hour dataset
+merged.24hr <- timeAverage(all_merged.1hr,avg.time = '24 hour',statistic = 'mean')
 
-merged.24hr$ODIN.2.5f<-predict(odin1.lm.1dy.pm2.5.fdms,
-                                  newdata = merged.24hr)
-merged.24hr$ODIN.10f<-predict(odin1.lm.1dy.pm10.fdms,
-                                 newdata = merged.24hr)
-merged.24hr$ODIN.coarse<-predict(odin1.lm.1dy.pmcoarse.fdms,
-                              newdata = merged.24hr)
-
-png('./raw_odin_fdms.png',width = 1500,height = 750)
+png('./raw_odin_fdms.png',width = 1500,height = 1500)
 tseries_pm2.5<-ggplot(data = all_merged.1hr, aes(x=date,y=PM2.5.FDMS))+
-  geom_line(colour = 'red',linetype = 2)+
+  geom_line(colour = 'red')+
   ylab(bquote(PM[2.5]~'('*mu~'g'~m^-3~')'))+
+  theme_bw()+
   theme(text=element_text(size=30))
-tseries_ODIN<-ggplot(data = all_merged.1hr, aes(x=date,y=ODIN))+
-  geom_line(colour = 'black',linetype = 1)+
+tseries_ODIN<-ggplot(data = all_merged.1hr, aes(x=date,y=ODIN_raw))+
+  geom_line(colour = 'black')+
+  theme_bw()+
   ylab('ODIN(mV)')+
   theme(text=element_text(size=30))
-tseries_pm10<-ggplot(data = all_merged.1hr, aes(x=date,y=PM10.FDMS))+
-  geom_line(colour = 'blue',linetype = 2)+
-  ylab(bquote(PM[10]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
-tseries_pmcoarse<-ggplot(data = all_merged.1hr, aes(x=date,y=PMcoarse))+
-  geom_line(colour = 'blue',linetype = 2)+
-  ylab(bquote(PM[coarse]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
-grid.arrange(tseries_pm2.5,tseries_ODIN,tseries_pmcoarse,ncol = 1)
+grid.arrange(tseries_pm2.5,tseries_ODIN,ncol = 1)
 dev.off()
+grid.arrange(tseries_pm2.5,tseries_ODIN,ncol = 1)
 
 png('./corrected_odin_fdms_PM2.5.png',width = 2400,height = 1200)
 tseries_pm2.5_1hr<-ggplot(data = all_merged.1hr, aes(x=date))+
-  geom_line(aes(y=PM2.5.FDMS),colour = 'red',linetype = 2)+
-  geom_line(aes(y=ODIN.2.5f),colour = 'black',linetype = 1)+
+  geom_line(aes(y=PM2.5.FDMS,colour = '0'))+
+  geom_line(aes(y=ODIN.2.5f,colour = '1'))+
   ylab(bquote(PM[2.5]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
+  theme_bw()+
+  ggtitle('a)')+
+  scale_colour_manual(values = c('red','black'),name='',labels = c(expression(PM[2.5]),'ODIN'))+
+  theme(text=element_text(size=30),legend.position=c(0.5,0.9))
 tseries_pm2.5_1dy<-ggplot(data = merged.24hr, aes(x=date))+
-  geom_line(aes(y=PM2.5.FDMS),colour = 'red',linetype = 2)+
-  geom_line(aes(y=ODIN.2.5f),colour = 'black',linetype = 1)+
+  geom_line(aes(y=PM2.5.FDMS,colour = '0'))+
+  geom_line(aes(y=ODIN.2.5f,colour = '1'))+
   ylab(bquote(PM[2.5]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
+  theme_bw()+
+  ggtitle('b)')+
+  scale_colour_manual(values = c('red','black'),name='',labels = c(expression(PM[2.5]),'ODIN'))+
+  theme(text=element_text(size=30),legend.position=c(0.5,0.9))
 grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,ncol = 1)
 dev.off()
+grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,ncol = 1)
 
-png('./corrected_odin_fdms_PM10.png',width = 2400,height = 1200)
-tseries_pm10_1hr<-ggplot(data = all_merged.1hr, aes(x=date))+
-  geom_line(aes(y=PM10.FDMS),colour = 'red',linetype = 2)+
-  geom_line(aes(y=ODIN.10f),colour = 'black',linetype = 1)+
-  ylab(bquote(PM[10]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
-tseries_pm10_1dy<-ggplot(data = merged.24hr, aes(x=date))+
-  geom_line(aes(y=PM10.FDMS),colour = 'red',linetype = 2)+
-  geom_line(aes(y=ODIN.10f),colour = 'black',linetype = 1)+
-  ylab(bquote(PM[10]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
-grid.arrange(tseries_pm10_1hr,tseries_pm10_1dy,ncol = 1)
+png('./corrected_odin_fdms_PM.png',width = 1500,height = 1500)
+grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,ncol=2)
 dev.off()
+grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,ncol=2)
 
-png('./corrected_odin_fdms_PMcoarse.png',width = 2400,height = 1200)
-tseries_pmcoarse_1hr<-ggplot(data = all_merged.1hr, aes(x=date))+
-  geom_line(aes(y=PMcoarse),colour = 'red',linetype = 2)+
-  geom_line(aes(y=ODIN.coarse),colour = 'black',linetype = 1)+
-  ylab(bquote(PM[coarse]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
-tseries_pmcoarse_1dy<-ggplot(data = merged.24hr, aes(x=date))+
-  geom_line(aes(y=PMcoarse),colour = 'red',linetype = 2)+
-  geom_line(aes(y=ODIN.coarse),colour = 'black',linetype = 1)+
-  ylab(bquote(PM[coarse]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
-grid.arrange(tseries_pmcoarse_1hr,tseries_pmcoarse_1dy,ncol = 1)
+png('./corrected_odin_scatter_hr.png',width = 1500,height = 1500)
+scatter_fitted_PM2.5_hour<-ggplot(data = all_merged.1hr,aes(x=PM2.5.FDMS,y = ODIN.2.5f))+
+  geom_point(shape = 1)+
+  geom_abline(intercept = 0, slope = 1)+
+  theme_bw()+
+  ggtitle('c)')+
+  theme(text=element_text(size=30))+
+  ylab(bquote(ODIN~estimate~'('*mu~'g'~m^-3~')'))+
+  xlab(bquote(PM[2.5]~'('*mu~'g'~m^-3~')'))
+scatter_fitted_PM2.5_hour
 dev.off()
+scatter_fitted_PM2.5_hour
+png('./corrected_odin_scatter_dy.png',width = 1500,height = 1500)
+scatter_fitted_PM2.5_day<-ggplot(data = merged.24hr,aes(x=PM2.5.FDMS,y = ODIN.2.5f))+
+  geom_point(shape = 1)+
+  geom_abline(intercept = 0, slope = 1)+
+  theme_bw()+
+  ggtitle('d)')+
+  theme(text=element_text(size=30))+
+  ylab(bquote(ODIN~estimate~'('*mu~'g'~m^-3~')'))+
+  xlab(bquote(PM[2.5]~'('*mu~'g'~m^-3~')'))
+scatter_fitted_PM2.5_day
+dev.off()
+scatter_fitted_PM2.5_day
 
-png('./corrected_odin_fdms_PM.png',width = 1500,height = 750)
-grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,tseries_pmcoarse_1hr,tseries_pmcoarse_1dy,ncol=2)
+png('./tseries_and_scatter.png',width = 1500, height = 1500)
+grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,scatter_fitted_PM2.5_hour,scatter_fitted_PM2.5_day,ncol=2)
 dev.off()
+grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,scatter_fitted_PM2.5_hour,scatter_fitted_PM2.5_day,ncol=2)
+
 
 # System information
 sessionInfo()
+
+
+
+
+
+
+
+
+

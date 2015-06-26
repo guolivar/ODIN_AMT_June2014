@@ -135,11 +135,13 @@ dust_data_temperature<-timeAverage(mydata = raw_dust_data_temperature,avg.time =
 long_scatter_temperature=reshape(dust_data_temperature[,c(2,3,4,5,6,7,8,9,10,11)],direction = 'long',varying = names(dust_data_temperature[2:9]),v.name='Dust',timevar = 'Sensor')
 long_scatter_temperature$Sensor=as.character(long_scatter_temperature$Sensor)
 png("./sensor_temperature_scatter.png",height = 620,width = 1280)
-ggplot(long_scatter_temperature, aes(x=Temperature, y=Dust, color=Sensor)) +
-  geom_point(shape=19,alpha=1/4)+
+long_scatter_temperature_plot<-ggplot(long_scatter_temperature, aes(x=Temperature, y=Dust, color=Sensor)) +
+  geom_point(shape=19,alpha=1/3,size = 10)+
+  theme_bw()+
   theme(text = element_text(size = 30))+
   xlab('Temperature (C)')+
   ylab('Sensor response (mV)')
+long_scatter_temperature_plot
 ```
 
 ```
@@ -155,6 +157,17 @@ dev.off()
 ## png 
 ##   2
 ```
+
+```r
+long_scatter_temperature_plot
+```
+
+```
+## Warning in loop_apply(n, do.ply): Removed 744 rows containing missing
+## values (geom_point).
+```
+
+![](odin_baseline_and_colocation_analysis_files/figure-html/unnamed-chunk-1-1.png) 
 
 ```r
 summary(Temp.lm<-lm(data=long_scatter_temperature,Dust~Temperature))
@@ -213,7 +226,7 @@ lag_test=ccf(all_merged.10min$Temperature,
              main='Temperature correlation as function of clock lag')
 ```
 
-![](odin_baseline_and_colocation_analysis_files/figure-html/unnamed-chunk-1-1.png) 
+![](odin_baseline_and_colocation_analysis_files/figure-html/unnamed-chunk-1-2.png) 
 
 ```r
 odin01_lag=lag_test$lag[which.max(lag_test$acf)]
@@ -222,42 +235,152 @@ odin_01$ODIN = odin_01$Dust
 odin_01$Dust<-NULL
 all_merged_FULL<-merge(odin_01,ecan_data,by = 'date',all = TRUE)
 all_merged.10min<-timeAverage(all_merged_FULL,avg.time = '10 min')
-
-# Dust performance using ECan data for calibration
-# Calibration expression:
-#  $ODIN_{calibrated}=A*ODIN_{raw}+B*Temperature_{ODIN}+C*RH_{ODIN}+D$
-
 # Full dataset 1 hour  
 all_merged.1hr<-timeAverage(all_merged.10min,avg.time='1 hour')
 all_merged.1hr$PMcoarse<-all_merged.1hr$PM10.FDMS - all_merged.1hr$PM2.5.FDMS
-# PM$_{2.5}$ fdms
-summary(odin1.lm.1hr.pm2.5.fdms<-
-          lm(data=all_merged.1hr,PM2.5.FDMS~
-               ODIN+Temperature+Humidity))
+
+# Remove drift from ODIN raw data
+# Estimate the baseline from a simple linear regression
+all_merged.1hr$ODIN_drift<-predict(lm(all_merged.1hr$ODIN~seq(all_merged.1hr$ODIN)),newdata = all_merged.1hr)
+
+all_merged.1hr$ODIN_drift[1] # Baseline at the beginning
+```
+
+```
+## [1] 403.3056
+```
+
+```r
+all_merged.1hr$ODIN_drift[length(all_merged.1hr$ODIN_drift)] # Baseline at the end 
+```
+
+```
+## [1] 287.552
+```
+
+```r
+# Remove the baseline drift from the raw ODIN data
+all_merged.1hr$ODIN_raw <- all_merged.1hr$ODIN
+all_merged.1hr$ODIN_detrend<-all_merged.1hr$ODIN_raw - all_merged.1hr$ODIN_drift
+# Temperature correction
+summary(odin_T<-lm(data=all_merged.1hr,ODIN_detrend~Temperature,subset = Temperature>10))
 ```
 
 ```
 ## 
 ## Call:
-## lm(formula = PM2.5.FDMS ~ ODIN + Temperature + Humidity, data = all_merged.1hr)
+## lm(formula = ODIN_detrend ~ Temperature, data = all_merged.1hr, 
+##     subset = Temperature > 10)
 ## 
 ## Residuals:
 ##     Min      1Q  Median      3Q     Max 
-## -32.901  -7.623  -1.608   5.541  95.078 
+## -62.750  -7.120  -0.781   9.946  28.070 
 ## 
 ## Coefficients:
-##              Estimate Std. Error t value Pr(>|t|)    
-## (Intercept) -35.57353    7.55221  -4.710 3.21e-06 ***
-## ODIN          0.37554    0.01526  24.605  < 2e-16 ***
-## Temperature  -4.45436    0.17393 -25.610  < 2e-16 ***
-## Humidity     -0.63004    0.07362  -8.558  < 2e-16 ***
+##             Estimate Std. Error t value Pr(>|t|)    
+## (Intercept) -49.2798     3.8994  -12.64   <2e-16 ***
+## Temperature   4.3821     0.2553   17.16   <2e-16 ***
 ## ---
 ## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
 ## 
-## Residual standard error: 13.79 on 502 degrees of freedom
+## Residual standard error: 13.49 on 189 degrees of freedom
 ##   (22 observations deleted due to missingness)
-## Multiple R-squared:  0.7002,	Adjusted R-squared:  0.6984 
-## F-statistic: 390.8 on 3 and 502 DF,  p-value: < 2.2e-16
+## Multiple R-squared:  0.6092,	Adjusted R-squared:  0.6071 
+## F-statistic: 294.6 on 1 and 189 DF,  p-value: < 2.2e-16
+```
+
+```r
+format(coef(odin_T),digits = 2)
+```
+
+```
+## (Intercept) Temperature 
+##     "-49.3"     "  4.4"
+```
+
+```r
+format((confint(odin_T)[,2]-confint(odin_T)[,1])/2,digits = 1)
+```
+
+```
+## (Intercept) Temperature 
+##       "7.7"       "0.5"
+```
+
+```r
+png('./odin_T_scatter.png',width = 750,height = 750)
+odin_T_scatter<-qplot(Temperature, ODIN_detrend,data = all_merged.1hr)+
+  #geom_point(colour = 'blue')
+  geom_abline(intercept = coef(odin_T)[1],slope = coef(odin_T)[2])+
+  ylab(bquote(ODIN[detrended]~'(mV)'))+
+  xlab('Temperature (C)')+
+  theme_bw()+
+  theme(text=element_text(size=30))
+odin_T_scatter
+```
+
+```
+## Warning in loop_apply(n, do.ply): Removed 22 rows containing missing values
+## (geom_point).
+```
+
+```r
+dev.off()
+```
+
+```
+## png 
+##   2
+```
+
+```r
+odin_T_scatter
+```
+
+```
+## Warning in loop_apply(n, do.ply): Removed 22 rows containing missing values
+## (geom_point).
+```
+
+![](odin_baseline_and_colocation_analysis_files/figure-html/unnamed-chunk-1-3.png) 
+
+```r
+all_merged.1hr$ODIN <- all_merged.1hr$ODIN_detrend - predict(odin_T,newdata = all_merged.1hr)
+
+# Dust performance using ECan data for calibration
+# Calibration expression:
+#  $ODIN_{calibrated}=A*ODIN_{raw}+B$
+
+# Using only the first 30% of the data to fit the models
+data_selection.1hr <- rbinom(length(all_merged.1hr$date),1,0.3)
+data_selection.1hr <- (seq(length(all_merged.1hr$date))<(length(all_merged.1hr$date)/3))
+# PM$_{2.5}$ fdms
+summary(odin1.lm.1hr.pm2.5.fdms<-
+          lm(data=all_merged.1hr,PM2.5.FDMS~ODIN,
+             subset = data_selection.1hr == 1))
+```
+
+```
+## 
+## Call:
+## lm(formula = PM2.5.FDMS ~ ODIN, data = all_merged.1hr, subset = data_selection.1hr == 
+##     1)
+## 
+## Residuals:
+##     Min      1Q  Median      3Q     Max 
+## -34.692  -6.487  -0.585   4.417  41.715 
+## 
+## Coefficients:
+##             Estimate Std. Error t value Pr(>|t|)    
+## (Intercept) 18.73469    0.89114   21.02   <2e-16 ***
+## ODIN         0.63465    0.02067   30.70   <2e-16 ***
+## ---
+## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+## 
+## Residual standard error: 10.95 on 158 degrees of freedom
+##   (15 observations deleted due to missingness)
+## Multiple R-squared:  0.8564,	Adjusted R-squared:  0.8555 
+## F-statistic: 942.6 on 1 and 158 DF,  p-value: < 2.2e-16
 ```
 
 ```r
@@ -265,8 +388,8 @@ format(coef(odin1.lm.1hr.pm2.5.fdms),digits = 1)
 ```
 
 ```
-## (Intercept)        ODIN Temperature    Humidity 
-##     "-35.6"     "  0.4"     " -4.5"     " -0.6"
+## (Intercept)        ODIN 
+##      "18.7"      " 0.6"
 ```
 
 ```r
@@ -274,287 +397,45 @@ format((confint(odin1.lm.1hr.pm2.5.fdms)[,2]-confint(odin1.lm.1hr.pm2.5.fdms)[,1
 ```
 
 ```
-## (Intercept)        ODIN Temperature    Humidity 
-##     "14.84"     " 0.03"     " 0.34"     " 0.14"
-```
-
-```r
-# PM$_{10}$ fdms
-summary(odin1.lm.1hr.pm10.fdms<-
-          lm(data=all_merged.1hr,PM10.FDMS~
-               ODIN+Temperature+Humidity))
-```
-
-```
-## 
-## Call:
-## lm(formula = PM10.FDMS ~ ODIN + Temperature + Humidity, data = all_merged.1hr)
-## 
-## Residuals:
-##     Min      1Q  Median      3Q     Max 
-## -35.859 -10.585  -2.442   7.733  97.719 
-## 
-## Coefficients:
-##              Estimate Std. Error t value Pr(>|t|)    
-## (Intercept) -43.12180    9.69449  -4.448 1.07e-05 ***
-## ODIN          0.42655    0.01959  21.771  < 2e-16 ***
-## Temperature  -4.47796    0.22327 -20.056  < 2e-16 ***
-## Humidity     -0.64501    0.09451  -6.825 2.54e-11 ***
-## ---
-## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
-## 
-## Residual standard error: 17.7 on 502 degrees of freedom
-##   (22 observations deleted due to missingness)
-## Multiple R-squared:  0.6084,	Adjusted R-squared:  0.6061 
-## F-statistic:   260 on 3 and 502 DF,  p-value: < 2.2e-16
-```
-
-```r
-format(coef(odin1.lm.1hr.pm10.fdms),digits = 1)
-```
-
-```
-## (Intercept)        ODIN Temperature    Humidity 
-##     "-43.1"     "  0.4"     " -4.5"     " -0.6"
-```
-
-```r
-format((confint(odin1.lm.1hr.pm10.fdms)[,2]-confint(odin1.lm.1hr.pm10.fdms)[,1])/2,digits = 1)
-```
-
-```
-## (Intercept)        ODIN Temperature    Humidity 
-##     "19.05"     " 0.04"     " 0.44"     " 0.19"
-```
-
-```r
-# PM$_{coarse}$ fdms
-summary(odin1.lm.1hr.pmcoarse.fdms<-
-          lm(data=all_merged.1hr,PMcoarse~
-               ODIN+Temperature+Humidity))
-```
-
-```
-## 
-## Call:
-## lm(formula = PMcoarse ~ ODIN + Temperature + Humidity, data = all_merged.1hr)
-## 
-## Residuals:
-##     Min      1Q  Median      3Q     Max 
-## -15.643  -4.900  -1.853   2.623  55.116 
-## 
-## Coefficients:
-##              Estimate Std. Error t value Pr(>|t|)    
-## (Intercept) -7.548270   4.487454  -1.682   0.0932 .  
-## ODIN         0.051013   0.009069   5.625 3.09e-08 ***
-## Temperature -0.023600   0.103349  -0.228   0.8195    
-## Humidity    -0.014970   0.043746  -0.342   0.7323    
-## ---
-## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
-## 
-## Residual standard error: 8.193 on 502 degrees of freedom
-##   (22 observations deleted due to missingness)
-## Multiple R-squared:  0.07253,	Adjusted R-squared:  0.06699 
-## F-statistic: 13.09 on 3 and 502 DF,  p-value: 3.064e-08
-```
-
-```r
-format(coef(odin1.lm.1hr.pmcoarse.fdms),digits = 1)
-```
-
-```
-## (Intercept)        ODIN Temperature    Humidity 
-##     "-7.55"     " 0.05"     "-0.02"     "-0.01"
-```
-
-```r
-format((confint(odin1.lm.1hr.pmcoarse.fdms)[,2]-confint(odin1.lm.1hr.pmcoarse.fdms)[,1])/2,digits = 1)
-```
-
-```
-## (Intercept)        ODIN Temperature    Humidity 
-##      "8.82"      "0.02"      "0.20"      "0.09"
-```
-
-```r
-# 24 hour dataset
-merged.24hr <- timeAverage(all_merged.1hr,avg.time = '24 hour',statistic = 'mean')
-
-# PM$_{2.5}$ fdms
-summary(odin1.lm.1dy.pm2.5.fdms<-
-          lm(data=merged.24hr,PM2.5.FDMS~
-               ODIN+Temperature+Humidity))
-```
-
-```
-## 
-## Call:
-## lm(formula = PM2.5.FDMS ~ ODIN + Temperature + Humidity, data = merged.24hr)
-## 
-## Residuals:
-##      Min       1Q   Median       3Q      Max 
-## -13.2703  -4.0617  -0.2754   4.1605  17.2774 
-## 
-## Coefficients:
-##             Estimate Std. Error t value Pr(>|t|)    
-## (Intercept) -3.16933   31.38948  -0.101   0.9207    
-## ODIN         0.31459    0.05786   5.437 3.64e-05 ***
-## Temperature -4.60105    0.86697  -5.307 4.80e-05 ***
-## Humidity    -0.79303    0.36717  -2.160   0.0445 *  
-## ---
-## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
-## 
-## Residual standard error: 8.715 on 18 degrees of freedom
-## Multiple R-squared:  0.7081,	Adjusted R-squared:  0.6595 
-## F-statistic: 14.56 on 3 and 18 DF,  p-value: 4.649e-05
-```
-
-```r
-format(coef(odin1.lm.1dy.pm2.5.fdms),digits = 1)
-```
-
-```
-## (Intercept)        ODIN Temperature    Humidity 
-##      "-3.2"      " 0.3"      "-4.6"      "-0.8"
-```
-
-```r
-format((confint(odin1.lm.1dy.pm2.5.fdms)[,2]-confint(odin1.lm.1dy.pm2.5.fdms)[,1])/2,digits = 1)
-```
-
-```
-## (Intercept)        ODIN Temperature    Humidity 
-##      "65.9"      " 0.1"      " 1.8"      " 0.8"
-```
-
-```r
-# PM$_{10}$ fdms
-summary(odin1.lm.1dy.pm10.fdms<-
-          lm(data=merged.24hr,PM10.FDMS~
-               ODIN+Temperature+Humidity))
-```
-
-```
-## 
-## Call:
-## lm(formula = PM10.FDMS ~ ODIN + Temperature + Humidity, data = merged.24hr)
-## 
-## Residuals:
-##      Min       1Q   Median       3Q      Max 
-## -17.2492  -5.5529   0.0465   4.7099  18.7966 
-## 
-## Coefficients:
-##             Estimate Std. Error t value Pr(>|t|)    
-## (Intercept)  2.58157   36.39163   0.071 0.944229    
-## ODIN         0.35067    0.06708   5.228 5.69e-05 ***
-## Temperature -4.76316    1.00513  -4.739 0.000164 ***
-## Humidity    -0.92979    0.42568  -2.184 0.042420 *  
-## ---
-## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
-## 
-## Residual standard error: 10.1 on 18 degrees of freedom
-## Multiple R-squared:  0.6679,	Adjusted R-squared:  0.6126 
-## F-statistic: 12.07 on 3 and 18 DF,  p-value: 0.0001448
-```
-
-```r
-format(coef(odin1.lm.1dy.pm10.fdms),digits = 1)
-```
-
-```
-## (Intercept)        ODIN Temperature    Humidity 
-##      " 2.6"      " 0.4"      "-4.8"      "-0.9"
-```
-
-```r
-format((confint(odin1.lm.1dy.pm10.fdms)[,2]-confint(odin1.lm.1dy.pm10.fdms)[,1])/2,digits = 1)
-```
-
-```
-## (Intercept)        ODIN Temperature    Humidity 
-##      "76.5"      " 0.1"      " 2.1"      " 0.9"
-```
-
-```r
-# PM$_{coarse}$ fdms
-summary(odin1.lm.1dy.pmcoarse.fdms<-
-          lm(data=merged.24hr,PMcoarse~
-               ODIN+Temperature+Humidity))
-```
-
-```
-## 
-## Call:
-## lm(formula = PMcoarse ~ ODIN + Temperature + Humidity, data = merged.24hr)
-## 
-## Residuals:
-##     Min      1Q  Median      3Q     Max 
-## -4.4221 -2.4466 -0.6244  1.8651  9.0318 
-## 
-## Coefficients:
-##             Estimate Std. Error t value Pr(>|t|)
-## (Intercept)  5.75090   14.21592   0.405    0.691
-## ODIN         0.03608    0.02620   1.377    0.185
-## Temperature -0.16212    0.39264  -0.413    0.685
-## Humidity    -0.13675    0.16629  -0.822    0.422
-## 
-## Residual standard error: 3.947 on 18 degrees of freedom
-## Multiple R-squared:  0.1776,	Adjusted R-squared:  0.04053 
-## F-statistic: 1.296 on 3 and 18 DF,  p-value: 0.3064
-```
-
-```r
-format(coef(odin1.lm.1dy.pmcoarse.fdms),digits = 1)
-```
-
-```
-## (Intercept)        ODIN Temperature    Humidity 
-##     " 5.75"     " 0.04"     "-0.16"     "-0.14"
-```
-
-```r
-format((confint(odin1.lm.1dy.pmcoarse.fdms)[,2]-confint(odin1.lm.1dy.pmcoarse.fdms)[,1])/2,digits = 1)
-```
-
-```
-## (Intercept)        ODIN Temperature    Humidity 
-##     "29.87"     " 0.06"     " 0.82"     " 0.35"
+## (Intercept)        ODIN 
+##      "1.76"      "0.04"
 ```
 
 ```r
 ### Calculate the corrected data
 all_merged.1hr$ODIN.2.5f<-predict(odin1.lm.1hr.pm2.5.fdms,
                                   newdata = all_merged.1hr)
-all_merged.1hr$ODIN.10f<-predict(odin1.lm.1hr.pm10.fdms,
-                                 newdata = all_merged.1hr)
-all_merged.1hr$ODIN.coarse<-predict(odin1.lm.1hr.pmcoarse.fdms,
-                                    newdata = all_merged.1hr)
+sqrt( mean( (all_merged.1hr$ODIN.2.5f-all_merged.1hr$PM2.5.FDMS)^2 , na.rm = TRUE ) ) #RMSE for the whole dataset
+```
 
-merged.24hr$ODIN.2.5f<-predict(odin1.lm.1dy.pm2.5.fdms,
-                                  newdata = merged.24hr)
-merged.24hr$ODIN.10f<-predict(odin1.lm.1dy.pm10.fdms,
-                                 newdata = merged.24hr)
-merged.24hr$ODIN.coarse<-predict(odin1.lm.1dy.pmcoarse.fdms,
-                              newdata = merged.24hr)
+```
+## [1] 15.41
+```
 
-png('./raw_odin_fdms.png',width = 1500,height = 750)
+```r
+cor(all_merged.1hr$ODIN.2.5f,all_merged.1hr$PM2.5.FDMS,use = "pairwise")^2 # R^2 for the whole dataset
+```
+
+```
+## [1] 0.7242653
+```
+
+```r
+# 24 hour dataset
+merged.24hr <- timeAverage(all_merged.1hr,avg.time = '24 hour',statistic = 'mean')
+
+png('./raw_odin_fdms.png',width = 1500,height = 1500)
 tseries_pm2.5<-ggplot(data = all_merged.1hr, aes(x=date,y=PM2.5.FDMS))+
-  geom_line(colour = 'red',linetype = 2)+
+  geom_line(colour = 'red')+
   ylab(bquote(PM[2.5]~'('*mu~'g'~m^-3~')'))+
+  theme_bw()+
   theme(text=element_text(size=30))
-tseries_ODIN<-ggplot(data = all_merged.1hr, aes(x=date,y=ODIN))+
-  geom_line(colour = 'black',linetype = 1)+
+tseries_ODIN<-ggplot(data = all_merged.1hr, aes(x=date,y=ODIN_raw))+
+  geom_line(colour = 'black')+
+  theme_bw()+
   ylab('ODIN(mV)')+
   theme(text=element_text(size=30))
-tseries_pm10<-ggplot(data = all_merged.1hr, aes(x=date,y=PM10.FDMS))+
-  geom_line(colour = 'blue',linetype = 2)+
-  ylab(bquote(PM[10]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
-tseries_pmcoarse<-ggplot(data = all_merged.1hr, aes(x=date,y=PMcoarse))+
-  geom_line(colour = 'blue',linetype = 2)+
-  ylab(bquote(PM[coarse]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
-grid.arrange(tseries_pm2.5,tseries_ODIN,tseries_pmcoarse,ncol = 1)
+grid.arrange(tseries_pm2.5,tseries_ODIN,ncol = 1)
 ```
 
 ```
@@ -572,17 +453,34 @@ dev.off()
 ```
 
 ```r
+grid.arrange(tseries_pm2.5,tseries_ODIN,ncol = 1)
+```
+
+```
+## Warning in loop_apply(n, do.ply): Removed 22 rows containing missing values
+## (geom_path).
+```
+
+![](odin_baseline_and_colocation_analysis_files/figure-html/unnamed-chunk-1-4.png) 
+
+```r
 png('./corrected_odin_fdms_PM2.5.png',width = 2400,height = 1200)
 tseries_pm2.5_1hr<-ggplot(data = all_merged.1hr, aes(x=date))+
-  geom_line(aes(y=PM2.5.FDMS),colour = 'red',linetype = 2)+
-  geom_line(aes(y=ODIN.2.5f),colour = 'black',linetype = 1)+
+  geom_line(aes(y=PM2.5.FDMS,colour = '0'))+
+  geom_line(aes(y=ODIN.2.5f,colour = '1'))+
   ylab(bquote(PM[2.5]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
+  theme_bw()+
+  ggtitle('a)')+
+  scale_colour_manual(values = c('red','black'),name='',labels = c(expression(PM[2.5]),'ODIN'))+
+  theme(text=element_text(size=30),legend.position=c(0.5,0.9))
 tseries_pm2.5_1dy<-ggplot(data = merged.24hr, aes(x=date))+
-  geom_line(aes(y=PM2.5.FDMS),colour = 'red',linetype = 2)+
-  geom_line(aes(y=ODIN.2.5f),colour = 'black',linetype = 1)+
+  geom_line(aes(y=PM2.5.FDMS,colour = '0'))+
+  geom_line(aes(y=ODIN.2.5f,colour = '1'))+
   ylab(bquote(PM[2.5]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
+  theme_bw()+
+  ggtitle('b)')+
+  scale_colour_manual(values = c('red','black'),name='',labels = c(expression(PM[2.5]),'ODIN'))+
+  theme(text=element_text(size=30),legend.position=c(0.5,0.9))
 grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,ncol = 1)
 ```
 
@@ -601,18 +499,19 @@ dev.off()
 ```
 
 ```r
-png('./corrected_odin_fdms_PM10.png',width = 2400,height = 1200)
-tseries_pm10_1hr<-ggplot(data = all_merged.1hr, aes(x=date))+
-  geom_line(aes(y=PM10.FDMS),colour = 'red',linetype = 2)+
-  geom_line(aes(y=ODIN.10f),colour = 'black',linetype = 1)+
-  ylab(bquote(PM[10]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
-tseries_pm10_1dy<-ggplot(data = merged.24hr, aes(x=date))+
-  geom_line(aes(y=PM10.FDMS),colour = 'red',linetype = 2)+
-  geom_line(aes(y=ODIN.10f),colour = 'black',linetype = 1)+
-  ylab(bquote(PM[10]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
-grid.arrange(tseries_pm10_1hr,tseries_pm10_1dy,ncol = 1)
+grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,ncol = 1)
+```
+
+```
+## Warning in loop_apply(n, do.ply): Removed 22 rows containing missing values
+## (geom_path).
+```
+
+![](odin_baseline_and_colocation_analysis_files/figure-html/unnamed-chunk-1-5.png) 
+
+```r
+png('./corrected_odin_fdms_PM.png',width = 1500,height = 1500)
+grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,ncol=2)
 ```
 
 ```
@@ -630,23 +529,32 @@ dev.off()
 ```
 
 ```r
-png('./corrected_odin_fdms_PMcoarse.png',width = 2400,height = 1200)
-tseries_pmcoarse_1hr<-ggplot(data = all_merged.1hr, aes(x=date))+
-  geom_line(aes(y=PMcoarse),colour = 'red',linetype = 2)+
-  geom_line(aes(y=ODIN.coarse),colour = 'black',linetype = 1)+
-  ylab(bquote(PM[coarse]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
-tseries_pmcoarse_1dy<-ggplot(data = merged.24hr, aes(x=date))+
-  geom_line(aes(y=PMcoarse),colour = 'red',linetype = 2)+
-  geom_line(aes(y=ODIN.coarse),colour = 'black',linetype = 1)+
-  ylab(bquote(PM[coarse]~'('*mu~'g'~m^-3~')'))+
-  theme(text=element_text(size=30))
-grid.arrange(tseries_pmcoarse_1hr,tseries_pmcoarse_1dy,ncol = 1)
+grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,ncol=2)
 ```
 
 ```
 ## Warning in loop_apply(n, do.ply): Removed 22 rows containing missing values
 ## (geom_path).
+```
+
+![](odin_baseline_and_colocation_analysis_files/figure-html/unnamed-chunk-1-6.png) 
+
+```r
+png('./corrected_odin_scatter_hr.png',width = 1500,height = 1500)
+scatter_fitted_PM2.5_hour<-ggplot(data = all_merged.1hr,aes(x=PM2.5.FDMS,y = ODIN.2.5f))+
+  geom_point(shape = 1)+
+  geom_abline(intercept = 0, slope = 1)+
+  theme_bw()+
+  ggtitle('c)')+
+  theme(text=element_text(size=30))+
+  ylab(bquote(ODIN~estimate~'('*mu~'g'~m^-3~')'))+
+  xlab(bquote(PM[2.5]~'('*mu~'g'~m^-3~')'))
+scatter_fitted_PM2.5_hour
+```
+
+```
+## Warning in loop_apply(n, do.ply): Removed 22 rows containing missing values
+## (geom_point).
 ```
 
 ```r
@@ -659,8 +567,44 @@ dev.off()
 ```
 
 ```r
-png('./corrected_odin_fdms_PM.png',width = 1500,height = 750)
-grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,tseries_pmcoarse_1hr,tseries_pmcoarse_1dy,ncol=2)
+scatter_fitted_PM2.5_hour
+```
+
+```
+## Warning in loop_apply(n, do.ply): Removed 22 rows containing missing values
+## (geom_point).
+```
+
+![](odin_baseline_and_colocation_analysis_files/figure-html/unnamed-chunk-1-7.png) 
+
+```r
+png('./corrected_odin_scatter_dy.png',width = 1500,height = 1500)
+scatter_fitted_PM2.5_day<-ggplot(data = merged.24hr,aes(x=PM2.5.FDMS,y = ODIN.2.5f))+
+  geom_point(shape = 1)+
+  geom_abline(intercept = 0, slope = 1)+
+  theme_bw()+
+  ggtitle('d)')+
+  theme(text=element_text(size=30))+
+  ylab(bquote(ODIN~estimate~'('*mu~'g'~m^-3~')'))+
+  xlab(bquote(PM[2.5]~'('*mu~'g'~m^-3~')'))
+scatter_fitted_PM2.5_day
+dev.off()
+```
+
+```
+## png 
+##   2
+```
+
+```r
+scatter_fitted_PM2.5_day
+```
+
+![](odin_baseline_and_colocation_analysis_files/figure-html/unnamed-chunk-1-8.png) 
+
+```r
+png('./tseries_and_scatter.png',width = 1500, height = 1500)
+grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,scatter_fitted_PM2.5_hour,scatter_fitted_PM2.5_day,ncol=2)
 ```
 
 ```
@@ -670,7 +614,7 @@ grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,tseries_pmcoarse_1hr,tseries_pm
 
 ```
 ## Warning in loop_apply(n, do.ply): Removed 22 rows containing missing values
-## (geom_path).
+## (geom_point).
 ```
 
 ```r
@@ -681,6 +625,22 @@ dev.off()
 ## png 
 ##   2
 ```
+
+```r
+grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,scatter_fitted_PM2.5_hour,scatter_fitted_PM2.5_day,ncol=2)
+```
+
+```
+## Warning in loop_apply(n, do.ply): Removed 22 rows containing missing values
+## (geom_path).
+```
+
+```
+## Warning in loop_apply(n, do.ply): Removed 22 rows containing missing values
+## (geom_point).
+```
+
+![](odin_baseline_and_colocation_analysis_files/figure-html/unnamed-chunk-1-9.png) 
 
 ```r
 # System information
@@ -727,5 +687,5 @@ sessionInfo()
 ---
 title: "odin_baseline_and_colocation_analysis.R"
 author: "gustavo"
-date: "Mon Jun 15 23:10:53 2015"
+date: "Fri Jun 26 14:19:17 2015"
 ---
