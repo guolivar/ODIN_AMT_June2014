@@ -17,6 +17,7 @@ require(ggplot2)
 require(openair)
 require(reshape2)
 require(gridExtra)
+require(dplyr)
 # Seed
 set.seed(1)
 ###############################################################################
@@ -156,8 +157,7 @@ all_merged.1hr$ODIN <- all_merged.1hr$ODIN_detrend - predict(odin_T,newdata = al
 # Calibration expression:
 #  $ODIN_{calibrated}=A*ODIN_{raw}+B$
 
-# Using only the first 30% of the data to fit the models
-data_selection.1hr <- rbinom(length(all_merged.1hr$date),1,0.3)
+# Using only the first 1/3 of the data to fit the models
 data_selection.1hr <- (seq(length(all_merged.1hr$date))<(length(all_merged.1hr$date)/3))
 # PM$_{2.5}$ fdms
 summary(odin1.lm.1hr.pm2.5.fdms<-
@@ -244,6 +244,47 @@ grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,scatter_fitted_PM2.5_hour,scatt
 dev.off()
 grid.arrange(tseries_pm2.5_1hr,tseries_pm2.5_1dy,scatter_fitted_PM2.5_hour,scatter_fitted_PM2.5_day,ncol=2)
 
+### Inlet performance
+# Load wind speed and direction data
+
+wind_data<-read.table("http://files.figshare.com/2166068/StAlbans24July_14August_2014_WIND.tsv",
+                      header = TRUE,
+                      sep="\t",
+                      quote = "\"'",
+                      dec=".")
+names(wind_data)<-c('date','wd','ws')
+wind_data$date<-as.POSIXct(wind_data$date,format = "%d/%m/%Y %I:%M:%S %p")
+wind_merge <- merge(all_merged.1hr,wind_data, by = 'date', all=TRUE)
+wind_merge <- data.frame(wind_merge,bin_ws=cut(wind_merge$ws,c(0,1,2,3,4,10),include.lowest = TRUE))
+wind_merge$ERROR <- wind_merge$PM2.5.FDMS - wind_merge$ODIN.2.5f
+
+# Wind direction
+inlet_wd<-ggplot(wind_merge,aes(x = wd,y = ERROR)) + 
+  geom_point(shape=19,alpha=1/3,size = 10) +
+  theme_bw()+
+  ggtitle('a)')+
+  theme(text=element_text(size=30))+
+  ylab(bquote(PM[2.5]-ODIN~'('*mu~'g'~m^-3~')'))+
+  xlab('Wind Direction') +
+  scale_x_continuous(breaks = c(0,45,90,135,180,225,270,315),
+                     labels = c('N','NE','E','SE','S','SW','W','NW'))
+inlet_wd
+
+# Wind speed
+inlet_ws<-ggplot(wind_merge,aes(x = ws,y = ERROR)) + 
+  geom_point(shape=19,alpha=1/3,size = 10) +
+  theme_bw()+
+  ggtitle('b)') +
+  theme(text=element_text(size=30)) +
+  ylab(bquote(PM[2.5]-ODIN~'('*mu~'g'~m^-3~')')) +
+  xlab(bquote(Wind~Speed~'(m '~s^-1~')')) +
+  scale_x_continuous(breaks = c(0,1,2,3,4,5,6,7))
+inlet_ws
+
+png('./inlet_scatter.png',width = 1500, height = 1500)
+grid.arrange(inlet_wd,inlet_ws,ncol=1)
+dev.off()
+grid.arrange(inlet_wd,inlet_ws,ncol=1)
 
 # System information
 sessionInfo()
